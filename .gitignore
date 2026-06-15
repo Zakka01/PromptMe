@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+
+# Mypy
+.mypy_cache/
+
+# Flake8
+.flake8
+
+# Pytest
+.pytest_cache/
+
+# Mac
+.DS_Store
+
+# Output files
+data/output/*.json
