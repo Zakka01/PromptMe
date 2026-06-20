@@ -1,5 +1,5 @@
 from pydantic import BaseModel, model_validator, field_validator, ValidationError
-from typing import List, Dict
+from typing import List, Dict, Any
 
 
 class ParameterSpec(BaseModel):
@@ -12,7 +12,6 @@ class ParameterSpec(BaseModel):
         if v not in allowed:
             raise ValueError("Invalid type")
         return v
-
 
 
 class FunctionValidator(BaseModel):
@@ -50,4 +49,17 @@ class PromptValidator(BaseModel):
     def validate_prompt(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Prompt cannot be empty or only spaces")
+        return value
+
+
+class OutputItem(BaseModel):
+    prompt: str
+    name: str
+    parameters: Dict[str, Any]
+
+    @field_validator("prompt", "name")
+    @classmethod
+    def validate_strings(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Field cannot be empty or only spaces")
         return value
