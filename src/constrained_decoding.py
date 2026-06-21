@@ -1,7 +1,7 @@
 from typing import List
 import numpy as np
+import re
 from llm_sdk.llm_sdk import Small_LLM_Model
-from src.data_validation import FunctionValidator
 
 
 class ConstrainedDecoder:
@@ -11,132 +11,105 @@ class ConstrainedDecoder:
         self.prompts = prompts 
         self.llm = llm
 
-    def format_full_definition(self, fn: FunctionValidator) -> str:
-        params_str = ", ".join(
-            [f"{k}: {v.type}" for k, v in fn.parameters.items()]
-        )
-        return (
-            f"{fn.name}({params_str}) -> "
-            f"{fn.returns.type}: {fn.description}"
+    def is_valid_int_prefix(self, s: str, prompt: str):
+        s = s.strip()
+        if s == "" or s == "-":
+            return True
+        if s.startswith("-"):
+            s = s[1:]
+        if not s.isdigit():
+            return False
+        prompt_numbers = re.findall(r'\d+', prompt)
+        return any(num.startswith(s) for num in prompt_numbers)
+
+    def is_int_done(self, s: str, prompt: str) -> bool:
+        s = s.strip()
+        nums = re.findall(r'\d+', prompt)
+        if s not in nums:
+            return False
+        # only done if no longer number in the prompt also starts with s
+        return not any(len(n) > len(s) and n.startswith(s) for n in nums)
+
+    def number_fsm(self, function_name: str, prompt: str, pname: str):
+
+        base_prompt = (
+            f"You are extracting one number that LITERALLY appears as text in the REQUEST.\n"
+            f"Do NOT calculate, solve, or do math. The VALUE must be copy-pasted from the "
+            f"REQUEST text, character for character. If the VALUE you're about to give does "
+            f"not appear in the REQUEST text, you are WRONG.\n\n"
+            "EXAMPLES:\n"
+            "REQUEST: What is the sum of 7 and 9?\n"
+            "PARAMETER: a (first number mentioned)\n"
+            "VALUE: 7\n\n"
+            "REQUEST: What is the sum of 7 and 9?\n"
+            "PARAMETER: b (second number mentioned)\n"
+            "VALUE: 9\n\n"
+            "REQUEST: What is the square root of 25?\n"
+            "PARAMETER: a\n"
+            "VALUE: 25\n\n"
+            "REQUEST: What is the square root of 81?\n"
+            "PARAMETER: a\n"
+            "VALUE: 81\n\n"
+            "REQUEST: Calculate the square root of 64\n"
+            "PARAMETER: a\n"
+            "VALUE: 64\n\n"
+            "REQUEST: Calculate the square root of 100\n"
+            "PARAMETER: a\n"
+            "VALUE: 100\n\n"
+            f"REQUEST: {prompt}\n"
+            f"PARAMETER: {pname}\n"
+            "VALUE:"
         )
 
-    def predict_top_tokens(
-            self,
-            prompt_message: str,
-            previous_tokens: str = "",
-            top_k: int = 10,
-        ) -> List[str]:
-        prompt = (
-            f"<|im_start|>user\n{prompt_message}<|im_end|>\n"
-            f"<|im_start|>assistant\n<think>\n\n</think>\n\n{previous_tokens}"
-        )
-    
-        input_ids = self.llm.encode(prompt)[0].tolist()
-        logits = self.llm.get_logits_from_input_ids(input_ids)
-        logits = np.asarray(logits)
-    
-        sorted_token_ids = np.argsort(-logits)
-    
-        top_ids = sorted_token_ids[:top_k]
-        return [self.llm.decode([int(tid)]) for tid in top_ids]
-    
-    
-    def number_fsm(self, function_name: str, prompt: str, pname: str, already_gen):
-    
-        function_def = self.functions[function_name]
-    
-        prompt = (
-            f"To solve the prompt {prompt}, you will use "
-            f"the following function: "
-            f"{self.format_full_definition(function_def)}. "
-            "Provide each parameter. Keep it concise and "
-            "don't add custom fields."
-        )
-    
-        argument_progress = ""
-        max_steps = 80  # safety cap
-        top_k = 50
-    
-        allowed_chars = set("-0123456789.\n")
-    
-        for _ in range(max_steps):
-            candidates = self.predict_top_tokens(
-                prompt_message=prompt,
-                previous_tokens=already_gen + argument_progress,
-                top_k=top_k,
-            )
-    
-            picked: str | None = None
-    
-            for gen_raw in candidates:
-                gen_raw = gen_raw.replace("Ġ", " ")
-                gen = gen_raw.replace("Ċ", "\n")
-                if gen_raw.strip() == "":
-                    continue
-    
-                if any(ch not in allowed_chars for ch in gen):
-                    continue
-    
-                candidate = argument_progress + gen
-    
-                if candidate.count(".") >= 2:
-                    continue
-                if candidate.count("-") >= 2:
-                    continue
-                if candidate.count("-") == 1 and not candidate.startswith("-"):
-                    continue
+        input_ids = self.llm.encode(base_prompt)[0].tolist()
+        generated = []
 
-                picked = gen
+        for _ in range(15):
+            logits = self.llm.get_logits_from_input_ids(input_ids)
+
+            valid_tokens = []
+            for tid, score in enumerate(logits):
+                candidates = self.llm.decode(generated + [tid]).strip()
+                if self.is_valid_int_prefix(candidates, prompt):
+                    valid_tokens.append(tid)
+
+            if not valid_tokens:
                 break
-    
-            if picked is None or picked == "":
-                break
-    
-            argument_progress += picked
-    
-            # stop once we hit newline (end-of-field)
-            if "\n" in argument_progress:
-                head = argument_progress.split("\n")[0]
-                if head != "":              # FIX 2: ignore leading empty newline
-                    argument_progress = head
+
+            best_token_id = max(valid_tokens, key=lambda t: logits[t])
+            input_ids.append(best_token_id)
+            generated.append(best_token_id)
+
+            text = self.llm.decode(generated).strip()
+            if self.is_int_done(text, prompt):
                     break
-                argument_progress = ""      # reset and keep looping
-                continue
-    
-        try:
-            if "." in argument_progress:    # FIX 3: preserve int vs float
-                return float(argument_progress)
-            return int(argument_progress)
-        except Exception:
-            return None                     # FIX 3: don't fake a 0.0 success
+
+        number = self.llm.decode(generated).strip()
+
+        return number
 
     def get_params_fsm(self, function_name: str, prompt: str) -> dict:
 
         params: dict = {}
         function_def = self.functions[function_name]
         func_params = function_def.parameters
+        print(f"\n{prompt}")
 
         for pname, pspec in func_params.items():
-
+            value = None
             param_type = pspec.type
-            already_gen = ""
-            for generated_name, generated_val in params.items():
-                already_gen += f"{generated_name}={generated_val}\n"
-            already_gen += f"{pname}="
-
-            value: object = None
 
             if param_type == "string":
                 ...
 
             elif param_type in ("number", "integer"):
-                value = self.number_fsm(function_name, prompt, pname, already_gen)
+                value = self.number_fsm(function_name, prompt, pname)
 
             elif param_type == "boolean":
                 ...
 
             params[pname] = value
-
+            
         print(params)
         return params
 
