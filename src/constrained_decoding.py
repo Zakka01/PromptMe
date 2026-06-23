@@ -11,82 +11,142 @@ class ConstrainedDecoder:
         self.prompts = prompts 
         self.llm = llm
 
-    def is_valid_int_prefix(self, s: str, prompt: str):
-        s = s.strip()
-        if s == "" or s == "-":
-            return True
-        if s.startswith("-"):
-            s = s[1:]
-        if not s.isdigit():
-            return False
-        prompt_numbers = re.findall(r'\d+', prompt)
-        return any(num.startswith(s) for num in prompt_numbers)
-
-    def is_int_done(self, s: str, prompt: str) -> bool:
-        s = s.strip()
-        nums = re.findall(r'\d+', prompt)
-        if s not in nums:
-            return False
-        # only done if no longer number in the prompt also starts with s
-        return not any(len(n) > len(s) and n.startswith(s) for n in nums)
-
-    def number_fsm(self, function_name: str, prompt: str, pname: str):
+    def number_fsm(self, function_name: str, prompt: str, pname: str, previously_gen: str):
 
         base_prompt = (
-            f"You are extracting one number that LITERALLY appears as text in the REQUEST.\n"
-            f"Do NOT calculate, solve, or do math. The VALUE must be copy-pasted from the "
-            f"REQUEST text, character for character. If the VALUE you're about to give does "
-            f"not appear in the REQUEST text, you are WRONG.\n\n"
-            "EXAMPLES:\n"
-            "REQUEST: What is the sum of 7 and 9?\n"
-            "PARAMETER: a (first number mentioned)\n"
-            "VALUE: 7\n\n"
-            "REQUEST: What is the sum of 7 and 9?\n"
-            "PARAMETER: b (second number mentioned)\n"
-            "VALUE: 9\n\n"
-            "REQUEST: What is the square root of 25?\n"
-            "PARAMETER: a\n"
-            "VALUE: 25\n\n"
-            "REQUEST: What is the square root of 81?\n"
-            "PARAMETER: a\n"
-            "VALUE: 81\n\n"
-            "REQUEST: Calculate the square root of 64\n"
-            "PARAMETER: a\n"
-            "VALUE: 64\n\n"
-            "REQUEST: Calculate the square root of 100\n"
-            "PARAMETER: a\n"
-            "VALUE: 100\n\n"
-            f"REQUEST: {prompt}\n"
-            f"PARAMETER: {pname}\n"
-            "VALUE:"
+            f"Function: {function_name}\n"
+            f"User request: {prompt}\n\n"
+            "Extract function parameters.\n"
+            "Do not solve the request.\n"
+            "Do not calculate.\n\n"
+            f"{previously_gen}"
         )
 
         input_ids = self.llm.encode(base_prompt)[0].tolist()
-        generated = []
+        generated = ""
+        allowed = set("0123456789-.\n")
+    
+        for _ in range(20):
+            logits = self.llm.get_logits_from_input_ids(input_ids)
+            valid_tokens = []
+            for tid, score in enumerate(logits):
 
-        for _ in range(15):
+                piece = self.llm.decode([tid])
+
+                if piece == "" or any(ch not in allowed for ch in piece):
+                    continue
+                candidate = generated + piece
+                if candidate.count(".") >= 2 or candidate.count("-") >= 2:
+                    continue
+                if "-" in candidate and not candidate.startswith("-"):
+                    continue
+
+                valid_tokens.append((tid, piece))
+    
+            if not valid_tokens:
+                break
+    
+            best_tid, best_piece = max(valid_tokens, key=lambda t: logits[t[0]])
+            input_ids.append(best_tid)
+            generated += best_piece
+    
+            if "\n" in generated:
+                generated = generated.split("\n")[0]
+                break
+
+        return int(generated.strip())
+
+    def regex_function_prompt(self, prompt: str, pname: str) -> str:
+        if pname == "regex":
+            return (
+                f"User request: {prompt}\n\n"
+                "Generate the regex value for parameter 'regex'.\n"
+                "  - for specific numbers in the text, join them with | (e.g. 34 and 233 -> 34|233)\n"
+                "  - for vowels, use: .*[aeiouAEIOU]\n"
+                "  - for a specific word, use just that word\n\n"
+                "Request: Replace all numbers in \"I have 12 cats and 99 dogs\" with X\n"
+                "regex: 12|99\n\n"
+                "Request: Replace all vowels in 'hello world' with stars\n"
+                "regex: .*[aeiouAEIOU]\n\n"
+                "Request: Substitute the word 'red' with 'blue' in 'the red car is red'\n"
+                "regex: red\n\n"
+                f"Request: {prompt}\n"
+                "regex:"
+            )
+        elif pname == "replacement":
+            return (
+                f"User request: {prompt}\n\n"
+                "Extract the replacement value (the new word/text to insert).\n\n"
+                "Request: Replace all vowels in 'hello world' with stars\n"
+                "replacement: stars\n\n"
+                "Request: Substitute the word 'red' with 'blue' in 'the red car is red'\n"
+                "replacement: blue\n\n"
+                "Request: Replace all numbers in \"I have 12 cats\" with X\n"
+                "replacement: X\n\n"
+                f"Request: {prompt}\n"
+                "replacement:"
+            )
+        else:  # source_string
+            return (
+                f"User request: {prompt}\n\n"
+                "Extract the ORIGINAL source string, before any replacement happens.\n\n"
+                "Request: Replace all vowels in 'hello world' with stars\n"
+                "source_string: hello world\n\n"
+                "Request: Substitute the word 'red' with 'blue' in 'the red car is red'\n"
+                "source_string: the red car is red\n\n"
+                f"Request: {prompt}\n"
+                "source_string:"
+            )
+
+    def string_fsm(self, function_name: str, prompt: str, pname: str, previously_gen: str):
+        
+        if function_name == "fn_substitute_string_with_regex":
+            base_prompt = self.regex_function_prompt(prompt, pname)
+        else:
+            base_prompt = (
+                f"Function: {function_name}\n"
+                f"User request: {prompt}\n\n"
+                f"Extract the value for parameter '{pname}'.\n"
+                "Do not solve the request. Copy the relevant text exactly.\n\n"
+                f"{pname}:"
+            )
+
+        input_ids = self.llm.encode(base_prompt)[0].tolist()
+        generated = ""
+
+        for _ in range(30):
             logits = self.llm.get_logits_from_input_ids(input_ids)
 
             valid_tokens = []
             for tid, score in enumerate(logits):
-                candidates = self.llm.decode(generated + [tid]).strip()
-                if self.is_valid_int_prefix(candidates, prompt):
-                    valid_tokens.append(tid)
+                piece = self.llm.decode([tid])
+
+                if piece == "" or piece == "\n":
+                    continue
+
+                candidate = generated + piece
+                if candidate.count("'") > 2 or candidate.count('"') > 2:
+                    continue
+
+                valid_tokens.append((tid, piece))
 
             if not valid_tokens:
                 break
 
-            best_token_id = max(valid_tokens, key=lambda t: logits[t])
-            input_ids.append(best_token_id)
-            generated.append(best_token_id)
+            best_tid, best_piece = max(valid_tokens, key=lambda t: logits[t[0]])
+            input_ids.append(best_tid)
+            generated += best_piece
 
-            text = self.llm.decode(generated).strip()
-            if self.is_int_done(text, prompt):
-                    break
+            if generated.count("'") == 2 or "\n" in generated:
+                if "'" in generated:
+                    generated = generated.replace("'", "").strip()
+                if '"' in generated:
+                    generated = generated.replace('"', "").strip()
+                elif "\n" in generated:
+                    generated = generated.split("\n")[0]
+                break
 
-        number = self.llm.decode(generated).strip()
-
-        return number
+        return generated.strip()
 
     def get_params_fsm(self, function_name: str, prompt: str) -> dict:
 
@@ -96,14 +156,20 @@ class ConstrainedDecoder:
         print(f"\n{prompt}")
 
         for pname, pspec in func_params.items():
+
+            previously_gen = ""
+            for name, val in params.items():
+                previously_gen += f"{name}={val}\n"
+            previously_gen += f"{pname}="
+
             value = None
             param_type = pspec.type
 
             if param_type == "string":
-                ...
+                value = self.string_fsm(function_name, prompt, pname, previously_gen)
 
             elif param_type in ("number", "integer"):
-                value = self.number_fsm(function_name, prompt, pname)
+                value = self.number_fsm(function_name, prompt, pname, previously_gen)
 
             elif param_type == "boolean":
                 ...
@@ -179,7 +245,15 @@ class ConstrainedDecoder:
              "ANSWER:"
         )
 
+        
         function_name = self.get_function_name(prompt, base_prompt)
         output_dict["name"] = function_name
+        output_dict["prompt"] = prompt
+
+        if function_name == "fn_anonymos":
+            output_dict["prompt"] = prompt
+            output_dict["name"] = function_name
+            output_dict["parameters"] = {"name": "string"}
 
         output_dict["parameters"] = self.get_params_fsm(function_name, prompt)
+        # print(output_dict)
