@@ -1,6 +1,6 @@
 from typing import List
 import numpy as np
-import re
+import json
 from llm_sdk.llm_sdk import Small_LLM_Model
 
 
@@ -10,6 +10,7 @@ class ConstrainedDecoder:
         self.functions = functions
         self.prompts = prompts 
         self.llm = llm
+        self.output = []
 
     def number_fsm(self, function_name: str, prompt: str, pname: str, previously_gen: str):
 
@@ -54,7 +55,7 @@ class ConstrainedDecoder:
                 generated = generated.split("\n")[0]
                 break
 
-        return int(generated.strip())
+        return float(generated.strip())
 
     def regex_function_prompt(self, prompt: str, pname: str) -> str:
         if pname == "regex":
@@ -86,14 +87,17 @@ class ConstrainedDecoder:
                 f"Request: {prompt}\n"
                 "replacement:"
             )
-        else:  # source_string
+        else:
             return (
                 f"User request: {prompt}\n\n"
-                "Extract the ORIGINAL source string, before any replacement happens.\n\n"
-                "Request: Replace all vowels in 'hello world' with stars\n"
-                "source_string: hello world\n\n"
+                "Extract the ORIGINAL source string, before any replacement happens. "
+                "Do NOT apply the substitution yourself.\n\n"
                 "Request: Substitute the word 'red' with 'blue' in 'the red car is red'\n"
+                "WRONG: the blue car is blue\n"
                 "source_string: the red car is red\n\n"
+                "Request: Substitute the word 'cat' with 'dog' in 'my cat is a cat'\n"
+                "WRONG: my dog is a dog\n"
+                "source_string: my cat is a cat\n\n"
                 f"Request: {prompt}\n"
                 "source_string:"
             )
@@ -153,7 +157,6 @@ class ConstrainedDecoder:
         params: dict = {}
         function_def = self.functions[function_name]
         func_params = function_def.parameters
-        print(f"\n{prompt}")
 
         for pname, pspec in func_params.items():
 
@@ -176,10 +179,34 @@ class ConstrainedDecoder:
 
             params[pname] = value
             
-        print(params)
         return params
 
-    def get_function_name(self, prompt: str, base_prompt: str) -> str:
+    def get_function_name(self, prompt: str) -> str:
+
+        function_block = ""
+        for value in self.functions.values():
+            function_block += (f"{value.name}: {value.description}\n")
+
+        base_prompt = (
+            "You are a function selector.\n"
+            "Your task is to choose exactly ONE function name from the available list.\n"
+            "Return ONLY the function name exactly as written. No extra text.\n\n"
+            "AVAILABLE FUNCTIONS:\n"
+            f"{function_block}\n\n"
+            "EXAMPLES:\n"
+            "USER: What is the sum of 2 and 3?\n"
+            "ANSWER: fn_add_numbers\n\n"
+            "USER: Greet shrek\n"
+            "ANSWER: fn_greet\n\n"
+            "USER: blah blah nothing here\n"
+            "ANSWER: fn_anonymos\n\n"
+            "USER: lalala\n"
+            "ANSWER: fn_anonymos\n\n"
+            "USER: ayayay\n"
+            "ANSWER: fn_anonymos\n\n"
+            f"USER: {prompt}\n"
+            "ANSWER:"
+        )
 
         input_ids = self.llm.encode(base_prompt)[0].tolist()
         generated = []
@@ -192,6 +219,7 @@ class ConstrainedDecoder:
 
             valid_token_ids = []
             for token_id, score in enumerate(logits):
+                
                 candidate = self.llm.decode(generated + [token_id]).strip()
 
                 if any(fn.startswith(candidate) for fn in valid_names):
@@ -209,51 +237,18 @@ class ConstrainedDecoder:
             if name in valid_names:
                 return name
 
-    def constrained_decoding(self, prompt: str) -> dict:
-        output_dict: dict = {}
-        output_dict["prompt"] = prompt
-
-        function_block = ""
-        for value in self.functions.values():
-            function_block += (f"{value.name}: {value.description}\n")
-
-        base_prompt = (
-             "You are a function selector.\n"
-             "Your task is to choose exactly ONE function name from the available list.\n"
-             "Return ONLY the function name exactly as written. No extra text.\n"
-     
-                 "RULES:\n"
-                 "- Do NOT guess\n"
-                 "- Do NOT pick a function if unsure\n"
-                 "- if prompt is not clear use fn_anonymos"
-                 "- Prefer fn_anonymos if not explicitly matching\n\n"
-
-             "AVAILABLE FUNCTIONS:\n"
-             f"{function_block}\n\n"
-
-             "EXAMPLES:\n"
-             "USER: What is the sum of 2 and 3?\n"
-             "ANSWER: fn_add_numbers\n\n"
-             
-             "USER: Greet shrek\n"
-             "ANSWER: fn_greet\n\n"
-             
-             "USER: Unknown task is unknown\n"
-             "ANSWER: fn_anonymos\n\n"
-             
-             f"USER: {prompt}\n"
-             "ANSWER:"
-        )
-
-        
-        function_name = self.get_function_name(prompt, base_prompt)
-        output_dict["name"] = function_name
-        output_dict["prompt"] = prompt
+    def constrained_decoding(self, prompt: str) -> List:
+        function_name = self.get_function_name(prompt)
 
         if function_name == "fn_anonymos":
-            output_dict["prompt"] = prompt
-            output_dict["name"] = function_name
-            output_dict["parameters"] = {"name": "string"}
-
-        output_dict["parameters"] = self.get_params_fsm(function_name, prompt)
-        # print(output_dict)
+            self.output.append({
+                "prompt": prompt,
+                "name": function_name,
+                "parameters": None
+            })
+        else:
+            self.output.append({
+                "prompt": prompt,
+                "name": function_name,
+                "parameters": self.get_params_fsm(function_name, prompt)
+            })
