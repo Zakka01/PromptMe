@@ -8,7 +8,6 @@ from .data_validation import FunctionValidator, ParameterSpec
 
 def main() -> None:
     parser = Parser()
-    llm = Small_LLM_Model()
 
     args = parser.parse_args()
     input_location = args["input"]
@@ -21,6 +20,7 @@ def main() -> None:
     functions: dict = parser.functions
     prompts: list[str] = parser.prompts
 
+    llm = Small_LLM_Model()
     decoder = ConstrainedDecoder(functions, prompts, llm)
     for prompt in prompts:
         decoder.constrained_decoding(prompt)

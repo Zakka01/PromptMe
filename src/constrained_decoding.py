@@ -1,6 +1,4 @@
 from typing import List
-import numpy as np
-import json
 from llm_sdk.llm_sdk import Small_LLM_Model
 
 
@@ -55,7 +53,7 @@ class ConstrainedDecoder:
                 generated = generated.split("\n")[0]
                 break
 
-        return float(generated.strip())
+        return generated.strip()
 
     def regex_function_prompt(self, prompt: str, pname: str) -> str:
         if pname == "regex":
@@ -112,6 +110,7 @@ class ConstrainedDecoder:
                 f"User request: {prompt}\n\n"
                 f"Extract the value for parameter '{pname}'.\n"
                 "Do not solve the request. Copy the relevant text exactly.\n\n"
+                f"{previously_gen}"
                 f"{pname}:"
             )
 
@@ -152,6 +151,46 @@ class ConstrainedDecoder:
 
         return generated.strip()
 
+    def bool_fsm(self, function_name: str, prompt: str, pname: str):
+        base_prompt = (
+            f"Function: {function_name}\n"
+            f"User request: {prompt}\n\n"
+            f"Extract the value for parameter '{pname}'.\n"
+            "Do not solve the request. Copy the relevant text exactly.\n\n"
+            f"{pname}:"
+        )
+
+        input_ids = self.llm.encode(base_prompt)[0].tolist()
+        allowed = "TrueFalse\n"
+        generated = ""
+
+        for n in range(15):
+            logits = self.llm.get_logits_from_input_ids(input_ids)
+
+            valid_tokens = []
+            for tid, score in enumerate(logits):
+                piece = self.llm.decode([tid])
+
+                if piece == "" or any(ch not in allowed for ch in piece):
+                    continue
+                candidate = generated + piece
+                if candidate.count("'") > 2 or candidate.count('"') > 2:
+                    continue
+
+                valid_tokens.append((tid, piece))
+
+            if not valid_tokens:
+                break
+
+            best_tid, best_piece = max(valid_tokens, key=lambda t: logits[t[0]])
+            input_ids.append(best_tid)
+            generated += best_piece
+
+            if generated.strip() in ("True", "False"):
+                break
+
+        return generated.strip()
+        
     def get_params_fsm(self, function_name: str, prompt: str) -> dict:
 
         params: dict = {}
@@ -172,10 +211,13 @@ class ConstrainedDecoder:
                 value = self.string_fsm(function_name, prompt, pname, previously_gen)
 
             elif param_type in ("number", "integer"):
-                value = self.number_fsm(function_name, prompt, pname, previously_gen)
+                if param_type == "number":
+                    value = float(self.number_fsm(function_name, prompt, pname, previously_gen))
+                else:
+                    value = int(self.number_fsm(function_name, prompt, pname, previously_gen))
 
             elif param_type == "boolean":
-                ...
+                value = self.bool_fsm(function_name, prompt, pname)
 
             params[pname] = value
             

@@ -6,13 +6,13 @@
     "prompt": "What is the sum of 265 and 345?"
   },
   {
-    "prompt": "Greet shrek and alice"
+    "prompt": "Greet shrek"
   },
   {
     "prompt": "Greet john"
   },
   {
-    "prompt": "Reverse the string 'hello' 'test'"
+    "prompt": "Reverse the string 'hello'"
   },
   {
     "prompt": "Reverse the string 'world'"
@@ -31,8 +31,5 @@
   },
   {
     "prompt": "Substitute the word 'cat' with 'dog' in 'The cat sat on the mat with another cat'"
-  },
-  {
-    "prompt": "ayayayayyyaay"
   }
 ]
