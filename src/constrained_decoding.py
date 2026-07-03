@@ -1,5 +1,7 @@
 from typing import List
 from llm_sdk.llm_sdk import Small_LLM_Model
+from pydantic import ValidationError
+from .data_validation import OutputItem
 
 
 class ConstrainedDecoder:
@@ -207,17 +209,28 @@ class ConstrainedDecoder:
             value = None
             param_type = pspec.type
 
-            if param_type == "string":
-                value = self.string_fsm(function_name, prompt, pname, previously_gen)
+            try:
 
-            elif param_type in ("number", "integer"):
-                if param_type == "number":
-                    value = float(self.number_fsm(function_name, prompt, pname, previously_gen))
+                if param_type == "string":
+                    value = self.string_fsm(function_name, prompt, pname, previously_gen)
+                elif param_type in ("number", "integer"):
+                    if param_type == "number":
+                        value = float(self.number_fsm(function_name, prompt, pname, previously_gen))
+                    else:
+                        value = int(self.number_fsm(function_name, prompt, pname, previously_gen))
+                elif param_type == "boolean":
+                    value = self.bool_fsm(function_name, prompt, pname)
                 else:
-                    value = int(self.number_fsm(function_name, prompt, pname, previously_gen))
+                    params[pname] = None
 
-            elif param_type == "boolean":
-                value = self.bool_fsm(function_name, prompt, pname)
+            except Exception:
+                # fallback defaults by type
+                params[pname] = (
+                    "" if pspec.type == "string"
+                    else 0 if pspec.type in ("number", "integer")
+                    else False if pspec.type == "boolean"
+                    else None
+                )
 
             params[pname] = value
             
@@ -279,18 +292,24 @@ class ConstrainedDecoder:
             if name in valid_names:
                 return name
 
-    def constrained_decoding(self, prompt: str) -> List:
+    def constrained_decoding(self, prompt: str) -> None:
         function_name = self.get_function_name(prompt)
 
         if function_name == "fn_anonymos":
-            self.output.append({
-                "prompt": prompt,
-                "name": function_name,
-                "parameters": None
-            })
+                output_dict = {
+                    "prompt": prompt,
+                    "name": function_name,
+                    "parameters": None
+                }
         else:
-            self.output.append({
+            output_dict = {
                 "prompt": prompt,
                 "name": function_name,
                 "parameters": self.get_params_fsm(function_name, prompt)
-            })
+            }
+    
+        try:
+            validated = OutputItem(**output_dict)
+            self.output.append(validated.model_dump())
+        except ValidationError as e:
+            print(f"Output validation error for prompt '{prompt}': {e.errors()[0]['msg']}")

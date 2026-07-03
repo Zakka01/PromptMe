@@ -55,7 +55,7 @@ class PromptValidator(BaseModel):
 class OutputItem(BaseModel):
     prompt: str
     name: str
-    parameters: Dict[str, Any]
+    parameters: Dict[str, Any] | None
 
     @field_validator("prompt", "name")
     @classmethod

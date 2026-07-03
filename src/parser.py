@@ -21,14 +21,20 @@ class Parser:
         i = 0
         while i < len(argv):
             if argv[i] == "--functions_definition":
+                if i + 1 >= len(argv):
+                    raise ValueError(f"Missing value for {argv[i]}")
                 args["functions_definition"] = argv[i + 1]
                 i += 2
 
             elif argv[i] == "--input":
+                if i + 1 >= len(argv):
+                    raise ValueError(f"Missing value for {argv[i]}")
                 args["input"] = argv[i + 1]
                 i += 2
 
             elif argv[i] == "--output":
+                if i + 1 >= len(argv):
+                    raise ValueError(f"Missing value for {argv[i]}")
                 args["output"] = argv[i + 1]
                 i += 2
 
@@ -66,6 +72,9 @@ class Parser:
         except ValidationError as e:
             print(f"Error: {e.errors()[0]['msg']}")
             exit(1)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            print(f"Error: {e}")
+            exit(1)
 
     def parse_prompt(self, file_path: str) -> None:
         try:
@@ -81,5 +90,8 @@ class Parser:
                 self.prompts.append(v.prompt)
 
         except ValidationError as e:
-            print(f"Error: {e.errors()[0]["msg"]}")
+            print(f"Error: {e.errors()[0]['msg']}")
+            exit(1)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            print(f"Error: {e}")
             exit(1)
