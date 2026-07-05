@@ -224,7 +224,6 @@ class ConstrainedDecoder:
                     params[pname] = None
 
             except Exception:
-                # fallback defaults by type
                 params[pname] = (
                     "" if pspec.type == "string"
                     else 0 if pspec.type in ("number", "integer")
