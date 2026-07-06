@@ -1,7 +1,7 @@
 import sys
 import json
-from typing import List, Any
-from .data_validation import FunctionValidator, PromptValidator, ValidationError, ParameterSpec
+from .data_validation import (FunctionValidator, PromptValidator,
+                              ValidationError, ParameterSpec)
 
 
 class Parser:
@@ -40,7 +40,7 @@ class Parser:
 
             else:
                 raise ValueError(f"Unknown argument: {argv[i]}")
-    
+
         return args
 
     def parse_functions_definition(self, file_path: str) -> None:

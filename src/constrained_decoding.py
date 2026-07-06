@@ -232,7 +232,7 @@ class ConstrainedDecoder:
                 )
 
             params[pname] = value
-            
+
         return params
 
     def get_function_name(self, prompt: str) -> str:
@@ -243,8 +243,10 @@ class ConstrainedDecoder:
 
         base_prompt = (
             "You are a function selector.\n"
-            "Your task is to choose exactly ONE function name from the available list.\n"
-            "Return ONLY the function name exactly as written. No extra text.\n\n"
+            "Your task is to choose exactly ONE function name "
+            "from the available list.\n"
+            "Return ONLY the function name exactly as written."
+            " No extra text.\n\n"
             "AVAILABLE FUNCTIONS:\n"
             f"{function_block}\n\n"
             "EXAMPLES:\n"
@@ -273,7 +275,7 @@ class ConstrainedDecoder:
 
             valid_token_ids = []
             for token_id, score in enumerate(logits):
-                
+
                 candidate = self.llm.decode(generated + [token_id]).strip()
 
                 if any(fn.startswith(candidate) for fn in valid_names):
@@ -295,20 +297,21 @@ class ConstrainedDecoder:
         function_name = self.get_function_name(prompt)
 
         if function_name == "fn_anonymos":
-                output_dict = {
-                    "prompt": prompt,
-                    "name": function_name,
-                    "parameters": None
-                }
+            output_dict = {
+                "prompt": prompt,
+                "name": function_name,
+                "parameters": None
+            }
         else:
             output_dict = {
                 "prompt": prompt,
                 "name": function_name,
                 "parameters": self.get_params_fsm(function_name, prompt)
             }
-    
+
         try:
             validated = OutputItem(**output_dict)
             self.output.append(validated.model_dump())
         except ValidationError as e:
-            print(f"Output validation error for prompt '{prompt}': {e.errors()[0]['msg']}")
+            print(f"Output validation error for prompt '{prompt}': "
+                  f"{e.errors()[0]['msg']}")
