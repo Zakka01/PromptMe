@@ -3,17 +3,25 @@ name = "call-me-maybe"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.10"
 dependencies = [
-    "huggingface-hub>=1.19.0",
-    "numpy>=2.4.6",
+    "flake8>=7.3.0",
+    "huggingface>=0.0.1",
+    "huggingface-hub>=1.22.0",
+    "mypy>=2.1.0",
     "pydantic>=2.13.4",
-    "torch>=2.12.0",
-    "transformers>=5.11.0",
+    "torch>=2.12.1",
+    "transformers>=5.13.0",
 ]
 
-[dependency-groups]
-dev = [
-    "flake8>=7.3.0",
-    "mypy>=2.1.0",
-]
+[tool.mypy]
+warn_return_any = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["llm_sdk", "llm_sdk.*"]
+follow_imports = "skip"
+ignore_errors = true

@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Any
 from llm_sdk.llm_sdk import Small_LLM_Model
 from pydantic import ValidationError
 from .data_validation import OutputItem
@@ -6,18 +6,27 @@ from .data_validation import OutputItem
 
 class ConstrainedDecoder:
 
-    def __init__(self, functions: dict, prompts: List, llm: Small_LLM_Model) -> None:
-        self.functions = functions
-        self.prompts = prompts 
-        self.llm = llm
-        self.output = []
+    def __init__(self,
+                 functions: dict,
+                 prompts: List,
+                 llm: Small_LLM_Model) -> None:
 
-    def number_fsm(self, function_name: str, prompt: str, pname: str, previously_gen: str):
+        self.functions = functions
+        self.prompts = prompts
+        self.llm = llm
+        self.output: List = []
+
+    def number_fsm(self,
+                   function_name: str,
+                   prompt: str,
+                   pname: str,
+                   previously_gen: str) -> str | None:
 
         base_prompt = (
             f"Function: {function_name}\n"
             f"User request: {prompt}\n\n"
-            "Extract function parameters.\n"
+            f"Extract ONLY the parameter '{pname}'.\n"
+            "If this parameter is not present in the request, do not output anything.\n"
             "Do not solve the request.\n"
             "Do not calculate.\n\n"
             f"{previously_gen}"
@@ -26,7 +35,13 @@ class ConstrainedDecoder:
         input_ids = self.llm.encode(base_prompt)[0].tolist()
         generated = ""
         allowed = set("0123456789-.\n")
-    
+
+        first_logits = self.llm.get_logits_from_input_ids(input_ids)
+        top_tid = max(range(len(first_logits)), key=lambda i: first_logits[i])
+        top_piece = self.llm.decode([top_tid])
+        if not top_piece or top_piece[0] not in allowed:
+            return None
+
         for _ in range(20):
             logits = self.llm.get_logits_from_input_ids(input_ids)
             valid_tokens = []
@@ -43,33 +58,42 @@ class ConstrainedDecoder:
                     continue
 
                 valid_tokens.append((tid, piece))
-    
+
             if not valid_tokens:
                 break
-    
-            best_tid, best_piece = max(valid_tokens, key=lambda t: logits[t[0]])
+
+            best_tid, best_piece = max(valid_tokens,
+                                       key=lambda t: logits[t[0]])
             input_ids.append(best_tid)
             generated += best_piece
-    
+
             if "\n" in generated:
                 generated = generated.split("\n")[0]
                 break
 
-        return generated.strip()
+        result = generated.strip()
+        if not result:
+            return None
+        if not any(d in prompt for d in result if d.isdigit()):
+            return None
+        return result
 
     def regex_function_prompt(self, prompt: str, pname: str) -> str:
         if pname == "regex":
             return (
                 f"User request: {prompt}\n\n"
                 "Generate the regex value for parameter 'regex'.\n"
-                "  - for specific numbers in the text, join them with | (e.g. 34 and 233 -> 34|233)\n"
+                "  - for specific numbers in the text, join them with |"
+                " (e.g. 34 and 233 -> 34|233)\n"
                 "  - for vowels, use: .*[aeiouAEIOU]\n"
                 "  - for a specific word, use just that word\n\n"
-                "Request: Replace all numbers in \"I have 12 cats and 99 dogs\" with X\n"
+                "Request: Replace all numbers in \"I have 12 cats and"
+                " 99 dogs\" with X\n"
                 "regex: 12|99\n\n"
                 "Request: Replace all vowels in 'hello world' with stars\n"
                 "regex: .*[aeiouAEIOU]\n\n"
-                "Request: Substitute the word 'red' with 'blue' in 'the red car is red'\n"
+                "Request: Substitute the word 'red' with 'blue'"
+                " in 'the red car is red'\n"
                 "regex: red\n\n"
                 f"Request: {prompt}\n"
                 "regex:"
@@ -77,10 +101,12 @@ class ConstrainedDecoder:
         elif pname == "replacement":
             return (
                 f"User request: {prompt}\n\n"
-                "Extract the replacement value (the new word/text to insert).\n\n"
+                "Extract the replacement value "
+                "(the new word/text to insert).\n\n"
                 "Request: Replace all vowels in 'hello world' with stars\n"
                 "replacement: stars\n\n"
-                "Request: Substitute the word 'red' with 'blue' in 'the red car is red'\n"
+                "Request: Substitute the word 'red' with 'blue' in"
+                " 'the red car is red'\n"
                 "replacement: blue\n\n"
                 "Request: Replace all numbers in \"I have 12 cats\" with X\n"
                 "replacement: X\n\n"
@@ -90,20 +116,27 @@ class ConstrainedDecoder:
         else:
             return (
                 f"User request: {prompt}\n\n"
-                "Extract the ORIGINAL source string, before any replacement happens. "
+                "Extract the ORIGINAL source string, before "
+                "any replacement happens. "
                 "Do NOT apply the substitution yourself.\n\n"
-                "Request: Substitute the word 'red' with 'blue' in 'the red car is red'\n"
+                "Request: Substitute the word 'red' with 'blue' in "
+                "'the red car is red'\n"
                 "WRONG: the blue car is blue\n"
                 "source_string: the red car is red\n\n"
-                "Request: Substitute the word 'cat' with 'dog' in 'my cat is a cat'\n"
+                "Request: Substitute the word 'cat' with 'dog' "
+                "in 'my cat is a cat'\n"
                 "WRONG: my dog is a dog\n"
                 "source_string: my cat is a cat\n\n"
                 f"Request: {prompt}\n"
                 "source_string:"
             )
 
-    def string_fsm(self, function_name: str, prompt: str, pname: str, previously_gen: str):
-        
+    def string_fsm(self,
+                   function_name: str,
+                   prompt: str,
+                   pname: str,
+                   previously_gen: str) -> str:
+
         if function_name == "fn_substitute_string_with_regex":
             base_prompt = self.regex_function_prompt(prompt, pname)
         else:
@@ -138,7 +171,8 @@ class ConstrainedDecoder:
             if not valid_tokens:
                 break
 
-            best_tid, best_piece = max(valid_tokens, key=lambda t: logits[t[0]])
+            best_tid, best_piece = max(valid_tokens,
+                                       key=lambda t: logits[t[0]])
             input_ids.append(best_tid)
             generated += best_piece
 
@@ -153,7 +187,7 @@ class ConstrainedDecoder:
 
         return generated.strip()
 
-    def bool_fsm(self, function_name: str, prompt: str, pname: str):
+    def bool_fsm(self, function_name: str, prompt: str, pname: str) -> str:
         base_prompt = (
             f"Function: {function_name}\n"
             f"User request: {prompt}\n\n"
@@ -184,7 +218,8 @@ class ConstrainedDecoder:
             if not valid_tokens:
                 break
 
-            best_tid, best_piece = max(valid_tokens, key=lambda t: logits[t[0]])
+            best_tid, best_piece = max(valid_tokens,
+                                       key=lambda t: logits[t[0]])
             input_ids.append(best_tid)
             generated += best_piece
 
@@ -192,7 +227,7 @@ class ConstrainedDecoder:
                 break
 
         return generated.strip()
-        
+
     def get_params_fsm(self, function_name: str, prompt: str) -> dict:
 
         params: dict = {}
@@ -206,18 +241,27 @@ class ConstrainedDecoder:
                 previously_gen += f"{name}={val}\n"
             previously_gen += f"{pname}="
 
-            value = None
+            value: float | int | str | None = None
             param_type = pspec.type
 
             try:
 
                 if param_type == "string":
-                    value = self.string_fsm(function_name, prompt, pname, previously_gen)
+                    value = self.string_fsm(function_name,
+                                            prompt,
+                                            pname,
+                                            previously_gen)
                 elif param_type in ("number", "integer"):
                     if param_type == "number":
-                        value = float(self.number_fsm(function_name, prompt, pname, previously_gen))
+                        value = float(self.number_fsm(function_name,
+                                                      prompt,
+                                                      pname,
+                                                      previously_gen))
                     else:
-                        value = int(self.number_fsm(function_name, prompt, pname, previously_gen))
+                        value = int(self.number_fsm(function_name,
+                                                    prompt,
+                                                    pname,
+                                                    previously_gen))
                 elif param_type == "boolean":
                     value = self.bool_fsm(function_name, prompt, pname)
                 else:
@@ -235,7 +279,7 @@ class ConstrainedDecoder:
 
         return params
 
-    def get_function_name(self, prompt: str) -> str:
+    def get_function_name(self, prompt: str) -> str | Any:
 
         function_block = ""
         for value in self.functions.values():
@@ -265,7 +309,7 @@ class ConstrainedDecoder:
         )
 
         input_ids = self.llm.encode(base_prompt)[0].tolist()
-        generated = []
+        generated: list = []
 
         valid_names = set(self.functions.keys())
 
@@ -292,6 +336,8 @@ class ConstrainedDecoder:
 
             if name in valid_names:
                 return name
+
+        return "fn_anonymos"
 
     def constrained_decoding(self, prompt: str) -> None:
         function_name = self.get_function_name(prompt)

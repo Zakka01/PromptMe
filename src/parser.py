@@ -1,15 +1,16 @@
 import sys
 import json
-from .data_validation import (FunctionValidator, PromptValidator,
-                              ValidationError, ParameterSpec)
+from typing import List
+from .data_validation import FunctionValidator, PromptValidator, ParameterSpec
+from pydantic import ValidationError
 
 
 class Parser:
-    def __init__(self):
-        self.functions = {}
-        self.prompts = []
+    def __init__(self) -> None:
+        self.functions: dict = {}
+        self.prompts: List = []
 
-    def parse_args(self):
+    def parse_args(self) -> dict:
         args = {
             "functions_definition": "data/input/functions_definition.json",
             "input": "data/input/function_calling_tests.json",
