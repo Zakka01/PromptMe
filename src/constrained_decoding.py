@@ -15,6 +15,12 @@ class ConstrainedDecoder:
         self.prompts = prompts
         self.llm = llm
         self.output: List = []
+        self.decode_cache: dict = {}
+
+    def cached_decode(self, tid: int) -> str | Any:
+        if tid not in self.decode_cache:
+            self.decode_cache[tid] = self.llm.decode([tid])
+        return self.decode_cache[tid]
 
     def number_fsm(self,
                    function_name: str,
@@ -26,7 +32,8 @@ class ConstrainedDecoder:
             f"Function: {function_name}\n"
             f"User request: {prompt}\n\n"
             f"Extract ONLY the parameter '{pname}'.\n"
-            "If this parameter is not present in the request, do not output anything.\n"
+            "If this parameter is not present in the request, "
+            "do not output anything.\n"
             "Do not solve the request.\n"
             "Do not calculate.\n\n"
             f"{previously_gen}"
@@ -38,7 +45,7 @@ class ConstrainedDecoder:
 
         first_logits = self.llm.get_logits_from_input_ids(input_ids)
         top_tid = max(range(len(first_logits)), key=lambda i: first_logits[i])
-        top_piece = self.llm.decode([top_tid])
+        top_piece = self.cached_decode(top_tid)
         if not top_piece or top_piece[0] not in allowed:
             return None
 
@@ -47,7 +54,7 @@ class ConstrainedDecoder:
             valid_tokens = []
             for tid, score in enumerate(logits):
 
-                piece = self.llm.decode([tid])
+                piece = self.cached_decode(tid)
 
                 if piece == "" or any(ch not in allowed for ch in piece):
                     continue
@@ -157,7 +164,7 @@ class ConstrainedDecoder:
 
             valid_tokens = []
             for tid, score in enumerate(logits):
-                piece = self.llm.decode([tid])
+                piece = self.cached_decode(tid)
 
                 if piece == "" or piece == "\n":
                     continue
@@ -205,7 +212,7 @@ class ConstrainedDecoder:
 
             valid_tokens = []
             for tid, score in enumerate(logits):
-                piece = self.llm.decode([tid])
+                piece = self.cached_decode(tid)
 
                 if piece == "" or any(ch not in allowed for ch in piece):
                     continue
@@ -228,7 +235,9 @@ class ConstrainedDecoder:
 
         return generated.strip()
 
-    def get_params_fsm(self, function_name: str, prompt: str) -> dict:
+    def get_params_fsm(self,
+                       function_name: str,
+                       prompt: str) -> dict:
 
         params: dict = {}
         function_def = self.functions[function_name]
@@ -253,15 +262,21 @@ class ConstrainedDecoder:
                                             previously_gen)
                 elif param_type in ("number", "integer"):
                     if param_type == "number":
-                        value = float(self.number_fsm(function_name,
-                                                      prompt,
-                                                      pname,
-                                                      previously_gen))
+                        value = self.number_fsm(function_name,
+                                                prompt,
+                                                pname,
+                                                previously_gen)
+                        if value is not None:
+                            value = float(value)
+
                     else:
-                        value = int(self.number_fsm(function_name,
-                                                    prompt,
-                                                    pname,
-                                                    previously_gen))
+                        value = self.number_fsm(function_name,
+                                                prompt,
+                                                pname,
+                                                previously_gen)
+                        if value is not None:
+                            value = int(value)
+
                 elif param_type == "boolean":
                     value = self.bool_fsm(function_name, prompt, pname)
                 else:
